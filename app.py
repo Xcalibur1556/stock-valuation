@@ -475,22 +475,23 @@ for r in rows:
         en = r["info"].get("sector", "其他")
         sector_rows[SECTOR_CN.get(en, en)].append(r)
 
+# sort rows by sector
+sorted_rows = [r for s in sorted(sector_rows) for r in sector_rows[s]]
+
 # ── overview cards ─────────────────────────────────────────────────────────────
 
-for sector in sorted(sector_rows):
-    sector_list = sector_rows[sector]
-    st.subheader(sector)
-    cols = st.columns(min(len(sector_list), 5))
-    for i, r in enumerate(sector_list):
-        with cols[i % 5]:
-            pe_str  = fmt(r["trailing_pe"])
-            pct_str = f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—"
-            st.metric(
-                label=f"{r['emoji']} **{r['sym']}**",
-                value=f"${r['price']:.2f}",
-                delta=f"{r['verdict']}  |  P/E {pe_str}  |  52w {pct_str}",
-                delta_color="off",
-            )
+n = len(sorted_rows)
+cols = st.columns(min(n, 5))
+for i, r in enumerate(sorted_rows):
+    with cols[i % 5]:
+        pe_str  = fmt(r["trailing_pe"])
+        pct_str = f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—"
+        st.metric(
+            label=f"{r['emoji']} **{r['sym']}**",
+            value=f"${r['price']:.2f}",
+            delta=f"{r['verdict']}  |  P/E {pe_str}  |  52w {pct_str}",
+            delta_color="off",
+        )
 
 st.divider()
 
@@ -499,24 +500,24 @@ st.divider()
 st.subheader("指标总览")
 
 table = []
-for sector in sorted(sector_rows):
-    for r in sector_rows[sector]:
-        table.append({
-            "代码":        r["sym"],
-            "名称":        r["name"],
-            "板块":        sector,
-            "现价":        f"${r['price']:.2f}",
-            "P/E":         fmt(r["trailing_pe"]),
-            "Forward P/E": fmt(r["forward_pe"]),
-            "PEG":         fmt(r["peg"], 2),
-            "EV/EBITDA":   fmt(r["ev_ebitda"]),
-            "P/S":         fmt(r["ps"]),
-            "P/B":         fmt(r["pb"]),
-            "股息率":      fmt(r["div_yield"], 2, "%") if r["div_yield"] else "—",
-            "52周位置":    f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—",
-            "估值判断":    f"{r['emoji']} {r['verdict']}",
-            "得分":        f"{r['score']:+.1f}",
-        })
+for r in sorted_rows:
+    sn = next(s for s in sector_rows if r in sector_rows[s])
+    table.append({
+        "代码":        r["sym"],
+        "名称":        r["name"],
+        "板块":        sn,
+        "现价":        f"${r['price']:.2f}",
+        "P/E":         fmt(r["trailing_pe"]),
+        "Forward P/E": fmt(r["forward_pe"]),
+        "PEG":         fmt(r["peg"], 2),
+        "EV/EBITDA":   fmt(r["ev_ebitda"]),
+        "P/S":         fmt(r["ps"]),
+        "P/B":         fmt(r["pb"]),
+        "股息率":      fmt(r["div_yield"], 2, "%") if r["div_yield"] else "—",
+        "52周位置":    f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—",
+        "估值判断":    f"{r['emoji']} {r['verdict']}",
+        "得分":        f"{r['score']:+.1f}",
+    })
 
 st.dataframe(pd.DataFrame(table), hide_index=True, use_container_width=True)
 
@@ -526,33 +527,31 @@ st.divider()
 
 st.subheader("逐只详情")
 
-for sector in sorted(sector_rows):
-    st.markdown(f"#### {sector}")
-    for r in sector_rows[sector]:
-        with st.expander(f"{r['emoji']}  {r['sym']} — {r['verdict']}（得分 {r['score']:+.1f}）"):
-            left, right = st.columns([1, 2])
+for r in sorted_rows:
+    with st.expander(f"{r['emoji']}  {r['sym']} — {r['verdict']}（得分 {r['score']:+.1f}）"):
+        left, right = st.columns([1, 2])
 
-            with left:
-                st.markdown(f"**{r['name']}**")
-                st.caption(sector)
+        with left:
+            st.markdown(f"**{r['name']}**")
+            st.caption(next(s for s in sector_rows if r in sector_rows[s]))
 
-                if r["pct52"] is not None:
-                    st.write(f"**52周区间位置：{r['pct52']*100:.0f}%**")
-                    st.progress(float(r["pct52"]))
-                    lo = r["info"].get("fiftyTwoWeekLow", 0)
-                    hi = r["info"].get("fiftyTwoWeekHigh", 0)
-                    a, b, c = st.columns(3)
-                    a.caption(f"低 ${lo:.2f}")
-                    b.caption(f"现 ${r['price']:.2f}")
-                    c.caption(f"高 ${hi:.2f}")
+            if r["pct52"] is not None:
+                st.write(f"**52周区间位置：{r['pct52']*100:.0f}%**")
+                st.progress(float(r["pct52"]))
+                lo = r["info"].get("fiftyTwoWeekLow", 0)
+                hi = r["info"].get("fiftyTwoWeekHigh", 0)
+                a, b, c = st.columns(3)
+                a.caption(f"低 ${lo:.2f}")
+                b.caption(f"现 ${r['price']:.2f}")
+                c.caption(f"高 ${hi:.2f}")
 
-                st.divider()
-                st.write("**估值信号**")
-                if r["signals"]:
-                    for sig in r["signals"]:
-                        st.write(f"· {sig}")
-                else:
-                    st.caption("数据不足")
+            st.divider()
+            st.write("**估值信号**")
+            if r["signals"]:
+                for sig in r["signals"]:
+                    st.write(f"· {sig}")
+            else:
+                st.caption("数据不足")
 
-            with right:
-                price_chart(r["sym"], r["info"])
+        with right:
+            price_chart(r["sym"], r["info"])
