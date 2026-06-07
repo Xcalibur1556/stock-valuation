@@ -301,9 +301,9 @@ def price_chart(symbol: str, info: dict):
     _add_chart_traces(fig, w, wc, wv, wvn, w_poc, w_clr, False)
 
     fig.update_layout(
-        height=340, margin=dict(t=44, b=10, l=0, r=10),
+        height=340, margin=dict(t=10, b=10, l=0, r=10),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ccc", size=11), legend=dict(orientation="h", y=1.18), bargap=0,
+        font=dict(color="#ccc", size=11), legend=dict(orientation="h", y=1.08), bargap=0,
         updatemenus=[dict(
             type="buttons", direction="left",
             buttons=[
@@ -311,7 +311,7 @@ def price_chart(symbol: str, info: dict):
                 dict(label="周线 3年", method="update", args=[{"visible": [False]*N + [True]*N}]),
             ],
             bgcolor="#2a2a2a", bordercolor="#555", font=dict(color="#ccc", size=11),
-            x=0.0, y=1.15, xanchor="left", yanchor="top",
+            x=0.01, y=0.99, xanchor="left", yanchor="top",
         )],
     )
     fig.update_xaxes(gridcolor="#2a2a2a", row=1, col=1)
