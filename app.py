@@ -61,7 +61,8 @@ def load_all_profiles() -> list:
     try:
         res = get_supabase().table("profiles").select("name").execute()
         return [r["name"] for r in res.data]
-    except Exception:
+    except Exception as e:
+        st.sidebar.error(f"Supabase错误：{e}")
         return []
 
 # ── data fetching ──────────────────────────────────────────────────────────────
