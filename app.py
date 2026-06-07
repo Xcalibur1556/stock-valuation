@@ -333,8 +333,6 @@ with st.sidebar:
 
     tickers = load_tickers(profile)
 
-    from streamlit_sortables import sort_items
-
     st.subheader("添加")
     col1, col2 = st.columns([3, 1])
     new = col1.text_input("代码", label_visibility="collapsed", placeholder="TSLA").upper().strip()
@@ -346,55 +344,56 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("关注列表")
-    sorted_tickers = sort_items(tickers, key="ticker_sort")
-    if sorted_tickers != tickers:
-        save_tickers(profile, sorted_tickers)
-        st.rerun()
-
-    to_remove = st.selectbox("删除", ["— 选择删除 —"] + tickers, label_visibility="collapsed", key="remove_sel")
-    if to_remove != "— 选择删除 —" and st.button("删除选中", use_container_width=True):
-        tickers = [t for t in tickers if t != to_remove]
-        save_tickers(profile, tickers)
-        st.rerun()
+    for i, sym in enumerate(list(tickers)):
+        c1, c2, c3, c4 = st.columns([4, 1, 1, 1])
+        c1.write(f"**{sym}**")
+        if c2.button("▲", key=f"up_{sym}", disabled=(i == 0)):
+            tickers[i], tickers[i - 1] = tickers[i - 1], tickers[i]
+            save_tickers(profile, tickers)
+            st.rerun()
+        if c3.button("▼", key=f"dn_{sym}", disabled=(i == len(tickers) - 1)):
+            tickers[i], tickers[i + 1] = tickers[i + 1], tickers[i]
+            save_tickers(profile, tickers)
+            st.rerun()
+        if c4.button("✕", key=f"del_{sym}"):
+            tickers.remove(sym)
+            save_tickers(profile, tickers)
+            st.rerun()
 
     st.divider()
 
-    others = [p for p in load_all_profiles() if p != profile]
-    if others:
-        st.subheader("其他用户")
-        for p in others:
-            if st.button(p, use_container_width=True, key=f"view_{p}"):
+    st.subheader("用户列表")
+    for p in load_all_profiles():
+        c1, c2, c3 = st.columns([3, 1, 1])
+        if p == profile:
+            c1.markdown(f"**→ {p}**")
+        else:
+            if c1.button(p, key=f"switch_{p}", use_container_width=True):
                 st.query_params["profile"] = p
                 st.rerun()
-        st.divider()
+        if c2.button("✏️", key=f"edit_{p}", help="重命名"):
+            st.session_state["editing_profile"] = p
+        if c3.button("🗑", key=f"del_{p}", help="删除"):
+            delete_profile(p)
+            if p == profile:
+                st.query_params.clear()
+            st.rerun()
 
-    with st.expander("管理用户"):
-        for p in load_all_profiles():
-            c1, c2, c3 = st.columns([3, 1, 1])
-            c1.write(f"**{p}**" if p == profile else p)
-            if c2.button("✏️", key=f"edit_{p}", help="重命名"):
-                st.session_state["editing_profile"] = p
-            if c3.button("🗑", key=f"del_{p}", help="删除"):
-                delete_profile(p)
-                if p == profile:
-                    st.query_params.clear()
-                st.rerun()
-
-        editing = st.session_state.get("editing_profile")
-        if editing:
-            st.caption(f"重命名「{editing}」")
-            new_name = st.text_input("新名字", value=editing, key="rename_input", label_visibility="collapsed")
-            ca, cb = st.columns(2)
-            if ca.button("保存", use_container_width=True):
-                if new_name.strip() and new_name.strip() != editing:
-                    rename_profile(editing, new_name.strip())
-                    if editing == profile:
-                        st.query_params["profile"] = new_name.strip()
-                del st.session_state["editing_profile"]
-                st.rerun()
-            if cb.button("取消", use_container_width=True):
-                del st.session_state["editing_profile"]
-                st.rerun()
+    editing = st.session_state.get("editing_profile")
+    if editing:
+        st.caption(f"重命名「{editing}」")
+        new_name = st.text_input("新名字", value=editing, key="rename_input", label_visibility="collapsed")
+        ca, cb = st.columns(2)
+        if ca.button("保存", use_container_width=True):
+            if new_name.strip() and new_name.strip() != editing:
+                rename_profile(editing, new_name.strip())
+                if editing == profile:
+                    st.query_params["profile"] = new_name.strip()
+            del st.session_state["editing_profile"]
+            st.rerun()
+        if cb.button("取消", use_container_width=True):
+            del st.session_state["editing_profile"]
+            st.rerun()
     st.divider()
 
     if st.button("🔄 刷新数据", use_container_width=True):
