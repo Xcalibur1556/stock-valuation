@@ -6,7 +6,8 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 st.set_page_config(
     page_title="估值扫描",
@@ -50,6 +51,14 @@ def save_tickers(profile: str, tickers: list):
         get_supabase().table("profiles").upsert({"name": profile, "tickers": tickers}).execute()
     except Exception as e:
         st.error(f"保存失败：{e}")
+
+@st.cache_data(ttl=60)
+def load_all_profiles() -> list:
+    try:
+        res = get_supabase().table("profiles").select("name").execute()
+        return [r["name"] for r in res.data]
+    except Exception:
+        return []
 
 # ── data fetching ──────────────────────────────────────────────────────────────
 
@@ -322,6 +331,16 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
+
+    all_profiles = [p for p in load_all_profiles() if p != profile]
+    if all_profiles:
+        st.subheader("其他用户")
+        for p in all_profiles:
+            if st.button(p, use_container_width=True, key=f"view_{p}"):
+                st.query_params["profile"] = p
+                st.rerun()
+        st.divider()
+
     if st.button("🔄 刷新数据", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -330,8 +349,8 @@ with st.sidebar:
 # ── main ───────────────────────────────────────────────────────────────────────
 
 st.title("股票 / ETF 估值快照")
-_cst = datetime.now(timezone.utc) + timedelta(hours=8)
-st.caption(f"更新于 {_cst.strftime('%Y-%m-%d %H:%M')} (北京时间)")
+_ny = datetime.now(ZoneInfo("America/New_York"))
+st.caption(f"更新于 {_ny.strftime('%Y-%m-%d %H:%M')} (NY时间)")
 
 if not tickers:
     st.info("在左侧添加股票代码开始扫描")
