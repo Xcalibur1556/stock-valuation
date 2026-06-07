@@ -322,7 +322,18 @@ profile = st.query_params.get("profile", "").strip()
 
 if not profile:
     st.markdown("## 📊 估值扫描")
-    st.markdown("输入昵称来创建或进入你的持仓列表，之后收藏地址栏的网址即可直接回来。")
+
+    existing = load_all_profiles()
+    if existing:
+        st.markdown("**选择用户**")
+        cols = st.columns(min(len(existing), 4))
+        for i, p in enumerate(existing):
+            if cols[i % 4].button(p, use_container_width=True, key=f"land_{p}"):
+                st.query_params["profile"] = p
+                st.rerun()
+        st.divider()
+
+    st.markdown("**新建用户**")
     c1, c2 = st.columns([3, 1])
     name_input = c1.text_input("昵称", placeholder="小明 / Alex ...", label_visibility="collapsed")
     if c2.button("进入", use_container_width=True) and name_input.strip():
