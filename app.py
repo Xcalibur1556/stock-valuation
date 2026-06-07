@@ -244,7 +244,7 @@ def weekly_chart(symbol: str, info: dict):
     w["BB_upper"] = bb_mid + 2 * bb_std
     w["BB_mid"]   = bb_mid
     w["BB_lower"] = bb_mid - 2 * bb_std
-    w = w.iloc[-52:]  # last 1 year of weeks
+    w = w.iloc[-156:]  # last 3 years of weeks
 
     n_bins = 60
     p_min, p_max = w["Low"].min(), w["High"].max()
@@ -302,7 +302,7 @@ def price_chart(symbol: str, info: dict):
     hist["BB_upper"] = bb_mid + 2 * bb_std
     hist["BB_mid"]   = bb_mid
     hist["BB_lower"] = bb_mid - 2 * bb_std
-    hist = hist.iloc[-126:]
+    hist = hist.iloc[-252:]
 
     # Volume Profile
     n_bins = 60
@@ -625,7 +625,7 @@ for r in sorted_rows:
                 st.caption("数据不足")
 
         with right:
-            tab_d, tab_w = st.tabs(["日线（6个月）", "周线（1年）"])
+            tab_d, tab_w = st.tabs(["日线（1年）", "周线（3年）"])
             with tab_d:
                 price_chart(r["sym"], r["info"])
             with tab_w:
