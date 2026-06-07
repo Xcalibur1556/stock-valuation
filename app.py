@@ -231,33 +231,63 @@ def fmt(val, digits=1, suffix=""):
     return f"{val:.{digits}f}{suffix}"
 
 def weekly_chart(symbol: str, info: dict):
-    hist = fetch_history(symbol, "2y")
+    # fetch 5y daily then resample → enough data for EMA200 weekly
+    hist = fetch_history(symbol, "5y")
     if hist.empty:
         st.caption("无法获取历史数据")
         return
     w = hist.resample("W").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
-    w = w.iloc[-52:]
-    w["EMA13"] = w["Close"].ewm(span=13, adjust=False).mean()
-    w["EMA26"] = w["Close"].ewm(span=26, adjust=False).mean()
+    w["MA50"]  = w["Close"].ewm(span=50,  adjust=False).mean()
+    w["MA200"] = w["Close"].ewm(span=200, adjust=False).mean()
+    bb_mid     = w["Close"].rolling(20).mean()
+    bb_std     = w["Close"].rolling(20).std()
+    w["BB_upper"] = bb_mid + 2 * bb_std
+    w["BB_mid"]   = bb_mid
+    w["BB_lower"] = bb_mid - 2 * bb_std
+    w = w.iloc[-52:]  # last 1 year of weeks
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.02)
-    fig.add_trace(go.Candlestick(
-        x=w.index, open=w["Open"], high=w["High"], low=w["Low"], close=w["Close"],
-        increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
-        name="K线", showlegend=False,
+    n_bins = 60
+    p_min, p_max = w["Low"].min(), w["High"].max()
+    bins = np.linspace(p_min, p_max, n_bins + 1)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    vp = np.zeros(n_bins)
+    for _, row in w.iterrows():
+        mask = (bins[1:] >= row["Low"]) & (bins[:-1] <= row["High"])
+        n_overlap = mask.sum()
+        if n_overlap > 0:
+            vp[mask] += row["Volume"] / n_overlap
+    poc_price = bin_centers[vp.argmax()]
+    vp_norm = vp / vp.max()
+    current_price = info.get("currentPrice") or info.get("regularMarketPrice") or w["Close"].iloc[-1]
+    bar_colors = ["rgba(100,180,255,0.5)" if c <= current_price else "rgba(255,120,120,0.5)" for c in bin_centers]
+
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.8, 0.2], horizontal_spacing=0.0)
+    fig.add_trace(go.Scatter(
+        x=list(w.index) + list(w.index[::-1]),
+        y=list(w["BB_upper"]) + list(w["BB_lower"][::-1]),
+        fill="toself", fillcolor="rgba(150,150,255,0.08)",
+        line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
     ), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["EMA13"], name="EMA13", line=dict(color="#f0a128", width=1.5)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["EMA26"], name="EMA26", line=dict(color="#e46f95", width=1.5, dash="dash")), row=1, col=1)
-    colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(w["Close"], w["Open"])]
-    fig.add_trace(go.Bar(x=w.index, y=w["Volume"], marker_color=colors, showlegend=False, name="成交量"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["BB_upper"], name="BB上轨", line=dict(color="rgba(150,150,255,0.5)", width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["BB_mid"],   name="BB中轨", line=dict(color="rgba(150,150,255,0.7)", width=1, dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["BB_lower"], name="BB下轨", line=dict(color="rgba(150,150,255,0.5)", width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["Close"],    name="收盘价", line=dict(color="#4da3ff", width=2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["MA50"],     name="EMA50",  line=dict(color="#f0a128", width=1.5, dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["MA200"],    name="EMA200", line=dict(color="#e46f95", width=1.5, dash="dash")), row=1, col=1)
+    fig.add_trace(go.Bar(x=vp_norm, y=bin_centers, orientation="h", marker_color=bar_colors,
+        marker_line_width=0, hovertemplate="价格 $%{y:.2f}<br>成交量 %{customdata:,.0f}<extra></extra>",
+        customdata=vp, showlegend=False), row=1, col=2)
+    fig.add_hline(y=poc_price, line_dash="dash", line_color="#FFD700", line_width=1.2,
+                  annotation_text=f"POC ${poc_price:.2f}", annotation_font_color="#FFD700", annotation_position="top right")
     fig.update_layout(
         height=320, margin=dict(t=10, b=10, l=0, r=10),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ccc", size=11), legend=dict(orientation="h", y=1.08),
-        xaxis_rangeslider_visible=False,
+        font=dict(color="#ccc", size=11), legend=dict(orientation="h", y=1.08), bargap=0,
     )
-    fig.update_xaxes(gridcolor="#2a2a2a")
-    fig.update_yaxes(gridcolor="#2a2a2a")
+    fig.update_xaxes(gridcolor="#2a2a2a", row=1, col=1)
+    fig.update_xaxes(showticklabels=False, showgrid=False, row=1, col=2)
+    fig.update_yaxes(gridcolor="#2a2a2a", row=1, col=1)
+    fig.update_yaxes(showticklabels=False, row=1, col=2)
     st.plotly_chart(fig, use_container_width=True)
 
 def price_chart(symbol: str, info: dict):
