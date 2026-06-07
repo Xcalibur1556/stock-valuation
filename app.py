@@ -326,9 +326,10 @@ if not profile:
     existing = load_all_profiles()
     if existing:
         st.markdown("**选择用户**")
-        cols = st.columns(min(len(existing), 4))
+        n = max(len(existing), 8)
+        cols = st.columns(n)
         for i, p in enumerate(existing):
-            if cols[i % 4].button(p, use_container_width=True, key=f"land_{p}"):
+            if cols[i].button(p, key=f"land_{p}"):
                 st.query_params["profile"] = p
                 st.rerun()
         st.divider()
