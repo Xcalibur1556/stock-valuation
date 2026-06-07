@@ -15,8 +15,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-TICKERS_FILE = "tickers.json"
-
 SECTOR_FAIR_PE = {
     "Technology": 28,
     "Healthcare": 22,
@@ -31,17 +29,27 @@ SECTOR_FAIR_PE = {
     "Basic Materials": 14,
 }
 
-# ── persistence ────────────────────────────────────────────────────────────────
+# ── Supabase ───────────────────────────────────────────────────────────────────
 
-def load_tickers():
-    if os.path.exists(TICKERS_FILE):
-        with open(TICKERS_FILE) as f:
-            return json.load(f)
-    return ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
+@st.cache_resource
+def get_supabase():
+    from supabase import create_client
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-def save_tickers(tickers):
-    with open(TICKERS_FILE, "w") as f:
-        json.dump(tickers, f, indent=2)
+def load_tickers(profile: str) -> list:
+    try:
+        res = get_supabase().table("profiles").select("tickers").eq("name", profile).execute()
+        if res.data:
+            return res.data[0]["tickers"]
+        return ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
+    except Exception:
+        return ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
+
+def save_tickers(profile: str, tickers: list):
+    try:
+        get_supabase().table("profiles").upsert({"name": profile, "tickers": tickers}).execute()
+    except Exception as e:
+        st.error(f"保存失败：{e}")
 
 # ── data fetching ──────────────────────────────────────────────────────────────
 
@@ -263,13 +271,31 @@ def price_chart(symbol: str, info: dict):
     fig.update_yaxes(showticklabels=False, row=1, col=2)
     st.plotly_chart(fig, use_container_width=True)
 
+# ── profile gate ──────────────────────────────────────────────────────────────
+
+profile = st.query_params.get("profile", "").strip()
+
+if not profile:
+    st.markdown("## 📊 估值扫描")
+    st.markdown("输入昵称来创建或进入你的持仓列表，之后收藏地址栏的网址即可直接回来。")
+    c1, c2 = st.columns([3, 1])
+    name_input = c1.text_input("昵称", placeholder="小明 / Alex ...", label_visibility="collapsed")
+    if c2.button("进入", use_container_width=True) and name_input.strip():
+        st.query_params["profile"] = name_input.strip()
+        st.rerun()
+    st.stop()
+
 # ── sidebar ────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("📊 估值扫描")
+    st.caption(f"当前用户：**{profile}**")
+    if st.button("切换用户", use_container_width=True):
+        st.query_params.clear()
+        st.rerun()
     st.divider()
 
-    tickers = load_tickers()
+    tickers = load_tickers(profile)
 
     st.subheader("添加")
     col1, col2 = st.columns([3, 1])
@@ -277,7 +303,7 @@ with st.sidebar:
     if col2.button("＋", use_container_width=True) and new:
         if new not in tickers:
             tickers.append(new)
-            save_tickers(tickers)
+            save_tickers(profile, tickers)
             st.cache_data.clear()
         st.rerun()
 
@@ -287,7 +313,7 @@ with st.sidebar:
         c1.write(f"**{sym}**")
         if c2.button("✕", key=f"del_{sym}"):
             tickers.remove(sym)
-            save_tickers(tickers)
+            save_tickers(profile, tickers)
             st.rerun()
 
     st.divider()
