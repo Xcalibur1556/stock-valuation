@@ -344,21 +344,35 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("关注列表")
-    for i, sym in enumerate(list(tickers)):
-        c1, c2, c3, c4 = st.columns([4, 1, 1, 1])
-        c1.write(f"**{sym}**")
-        if c2.button("▲", key=f"up_{sym}", disabled=(i == 0)):
-            tickers[i], tickers[i - 1] = tickers[i - 1], tickers[i]
-            save_tickers(profile, tickers)
-            st.rerun()
-        if c3.button("▼", key=f"dn_{sym}", disabled=(i == len(tickers) - 1)):
-            tickers[i], tickers[i + 1] = tickers[i + 1], tickers[i]
-            save_tickers(profile, tickers)
-            st.rerun()
-        if c4.button("✕", key=f"del_{sym}"):
-            tickers.remove(sym)
-            save_tickers(profile, tickers)
-            st.rerun()
+    SECTOR_CN = {
+        "Technology": "科技", "Healthcare": "医疗健康",
+        "Financial Services": "金融", "Consumer Cyclical": "消费（周期）",
+        "Consumer Defensive": "消费（必需）", "Industrials": "工业",
+        "Energy": "能源", "Utilities": "公用事业",
+        "Real Estate": "房地产", "Communication Services": "通信",
+        "Basic Materials": "原材料",
+    }
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for sym in tickers:
+        info = fetch_info(sym)
+        if not info:
+            groups["其他"].append(sym)
+        elif info.get("quoteType") == "ETF":
+            groups["ETF"].append(sym)
+        else:
+            en = info.get("sector", "其他")
+            groups[SECTOR_CN.get(en, en)].append(sym)
+
+    for sector in sorted(groups):
+        st.caption(sector)
+        for sym in groups[sector]:
+            c1, c2 = st.columns([4, 1])
+            c1.write(f"**{sym}**")
+            if c2.button("✕", key=f"del_{sym}"):
+                tickers.remove(sym)
+                save_tickers(profile, tickers)
+                st.rerun()
 
     st.divider()
 
