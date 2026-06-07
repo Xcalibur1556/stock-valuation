@@ -6,7 +6,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 st.set_page_config(
     page_title="估值扫描",
@@ -53,18 +53,22 @@ def save_tickers(profile: str, tickers: list):
 
 # ── data fetching ──────────────────────────────────────────────────────────────
 
+@st.cache_resource
+def get_yf_session():
+    from curl_cffi import requests as cf_requests
+    return cf_requests.Session(impersonate="chrome")
+
 @st.cache_data(ttl=300)
 def fetch_info(symbol: str):
     try:
-        return yf.Ticker(symbol).info
-    except Exception as e:
-        st.warning(f"{symbol} 错误详情：{e}")
+        return yf.Ticker(symbol, session=get_yf_session()).info
+    except Exception:
         return {}
 
 @st.cache_data(ttl=3600)
 def fetch_history(symbol: str, period: str = "1y"):
     try:
-        return yf.Ticker(symbol).history(period=period)
+        return yf.Ticker(symbol, session=get_yf_session()).history(period=period)
     except Exception:
         return pd.DataFrame()
 
@@ -326,7 +330,8 @@ with st.sidebar:
 # ── main ───────────────────────────────────────────────────────────────────────
 
 st.title("股票 / ETF 估值快照")
-st.caption(f"更新于 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+_cst = datetime.now(timezone.utc) + timedelta(hours=8)
+st.caption(f"更新于 {_cst.strftime('%Y-%m-%d %H:%M')} (北京时间)")
 
 if not tickers:
     st.info("在左侧添加股票代码开始扫描")
