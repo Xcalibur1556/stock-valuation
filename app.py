@@ -336,10 +336,12 @@ with st.sidebar:
 
     st.divider()
 
-    all_profiles = [p for p in load_all_profiles() if p != profile]
-    if all_profiles:
+    all_profiles = load_all_profiles()
+    st.caption(f"DEBUG: 所有用户={all_profiles}")
+    others = [p for p in all_profiles if p != profile]
+    if others:
         st.subheader("其他用户")
-        for p in all_profiles:
+        for p in others:
             if st.button(p, use_container_width=True, key=f"view_{p}"):
                 st.query_params["profile"] = p
                 st.rerun()
