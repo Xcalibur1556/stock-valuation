@@ -38,13 +38,17 @@ def get_supabase():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 def load_tickers(profile: str) -> list:
+    defaults = ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
     try:
-        res = get_supabase().table("profiles").select("tickers").eq("name", profile).execute()
+        sb = get_supabase()
+        res = sb.table("profiles").select("tickers").eq("name", profile).execute()
         if res.data:
             return res.data[0]["tickers"]
-        return ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
+        sb.table("profiles").insert({"name": profile, "tickers": defaults}).execute()
+        load_all_profiles.clear()
+        return defaults
     except Exception:
-        return ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
+        return defaults
 
 def save_tickers(profile: str, tickers: list):
     try:
