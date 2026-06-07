@@ -230,145 +230,89 @@ def fmt(val, digits=1, suffix=""):
         return "—"
     return f"{val:.{digits}f}{suffix}"
 
-def weekly_chart(symbol: str, info: dict):
-    # fetch 5y daily then resample → enough data for EMA200 weekly
-    hist = fetch_history(symbol, "5y")
-    if hist.empty:
-        st.caption("无法获取历史数据")
-        return
-    w = hist.resample("W").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
-    w["MA50"]  = w["Close"].ewm(span=50,  adjust=False).mean()
-    w["MA200"] = w["Close"].ewm(span=200, adjust=False).mean()
-    bb_mid     = w["Close"].rolling(20).mean()
-    bb_std     = w["Close"].rolling(20).std()
-    w["BB_upper"] = bb_mid + 2 * bb_std
-    w["BB_mid"]   = bb_mid
-    w["BB_lower"] = bb_mid - 2 * bb_std
-    w = w.iloc[-156:]  # last 3 years of weeks
+def _build_indicators(h):
+    h = h.copy()
+    h["MA50"]  = h["Close"].ewm(span=50,  adjust=False).mean()
+    h["MA200"] = h["Close"].ewm(span=200, adjust=False).mean()
+    bb_mid = h["Close"].rolling(20).mean()
+    bb_std = h["Close"].rolling(20).std()
+    h["BB_upper"] = bb_mid + 2 * bb_std
+    h["BB_mid"]   = bb_mid
+    h["BB_lower"] = bb_mid - 2 * bb_std
+    return h
 
+def _calc_vp(h, current_price):
     n_bins = 60
-    p_min, p_max = w["Low"].min(), w["High"].max()
+    p_min, p_max = h["Low"].min(), h["High"].max()
     bins = np.linspace(p_min, p_max, n_bins + 1)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
+    centers = (bins[:-1] + bins[1:]) / 2
     vp = np.zeros(n_bins)
-    for _, row in w.iterrows():
+    for _, row in h.iterrows():
         mask = (bins[1:] >= row["Low"]) & (bins[:-1] <= row["High"])
-        n_overlap = mask.sum()
-        if n_overlap > 0:
-            vp[mask] += row["Volume"] / n_overlap
-    poc_price = bin_centers[vp.argmax()]
+        n = mask.sum()
+        if n > 0:
+            vp[mask] += row["Volume"] / n
+    poc = centers[vp.argmax()]
     vp_norm = vp / vp.max()
-    current_price = info.get("currentPrice") or info.get("regularMarketPrice") or w["Close"].iloc[-1]
-    bar_colors = ["rgba(100,180,255,0.5)" if c <= current_price else "rgba(255,120,120,0.5)" for c in bin_centers]
+    colors = ["rgba(100,180,255,0.5)" if c <= current_price else "rgba(255,120,120,0.5)" for c in centers]
+    return centers, vp, vp_norm, poc, colors
 
-    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.8, 0.2], horizontal_spacing=0.0)
+def _add_chart_traces(fig, h, centers, vp, vp_norm, poc, bar_colors, visible):
+    v = visible
     fig.add_trace(go.Scatter(
-        x=list(w.index) + list(w.index[::-1]),
-        y=list(w["BB_upper"]) + list(w["BB_lower"][::-1]),
+        x=list(h.index) + list(h.index[::-1]),
+        y=list(h["BB_upper"]) + list(h["BB_lower"][::-1]),
         fill="toself", fillcolor="rgba(150,150,255,0.08)",
-        line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
+        line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False, visible=v,
     ), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["BB_upper"], name="BB上轨", line=dict(color="rgba(150,150,255,0.5)", width=1)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["BB_mid"],   name="BB中轨", line=dict(color="rgba(150,150,255,0.7)", width=1, dash="dot")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["BB_lower"], name="BB下轨", line=dict(color="rgba(150,150,255,0.5)", width=1)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["Close"],    name="收盘价", line=dict(color="#4da3ff", width=2)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["MA50"],     name="EMA50",  line=dict(color="#f0a128", width=1.5, dash="dot")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=w.index, y=w["MA200"],    name="EMA200", line=dict(color="#e46f95", width=1.5, dash="dash")), row=1, col=1)
-    fig.add_trace(go.Bar(x=vp_norm, y=bin_centers, orientation="h", marker_color=bar_colors,
-        marker_line_width=0, hovertemplate="价格 $%{y:.2f}<br>成交量 %{customdata:,.0f}<extra></extra>",
-        customdata=vp, showlegend=False), row=1, col=2)
-    fig.add_hline(y=poc_price, line_dash="dash", line_color="#FFD700", line_width=1.2,
-                  annotation_text=f"POC ${poc_price:.2f}", annotation_font_color="#FFD700", annotation_position="top right")
-    fig.update_layout(
-        height=320, margin=dict(t=10, b=10, l=0, r=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ccc", size=11), legend=dict(orientation="h", y=1.08), bargap=0,
-    )
-    fig.update_xaxes(gridcolor="#2a2a2a", row=1, col=1)
-    fig.update_xaxes(showticklabels=False, showgrid=False, row=1, col=2)
-    fig.update_yaxes(gridcolor="#2a2a2a", row=1, col=1)
-    fig.update_yaxes(showticklabels=False, row=1, col=2)
-    st.plotly_chart(fig, use_container_width=True)
+    fig.add_trace(go.Scatter(x=h.index, y=h["BB_upper"], name="BB上轨", line=dict(color="rgba(150,150,255,0.5)", width=1), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["BB_mid"],   name="BB中轨", line=dict(color="rgba(150,150,255,0.7)", width=1, dash="dot"), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["BB_lower"], name="BB下轨", line=dict(color="rgba(150,150,255,0.5)", width=1), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["Close"],    name="收盘价", line=dict(color="#4da3ff", width=2), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["MA50"],     name="EMA50",  line=dict(color="#f0a128", width=1.5, dash="dot"), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["MA200"],    name="EMA200", line=dict(color="#e46f95", width=1.5, dash="dash"), visible=v), row=1, col=1)
+    fig.add_trace(go.Bar(x=vp_norm, y=centers, orientation="h", marker_color=bar_colors,
+        marker_line_width=0, showlegend=False, visible=v,
+        hovertemplate="价格 $%{y:.2f}<br>成交量 %{customdata:,.0f}<extra></extra>", customdata=vp,
+    ), row=1, col=2)
+    fig.add_trace(go.Scatter(
+        x=[h.index[0], h.index[-1]], y=[poc, poc],
+        mode="lines", line=dict(color="#FFD700", width=1.2, dash="dash"),
+        name=f"POC ${poc:.2f}", showlegend=False, visible=v,
+    ), row=1, col=1)
 
 def price_chart(symbol: str, info: dict):
-    hist = fetch_history(symbol, "2y")
-    if hist.empty:
+    raw = fetch_history(symbol, "5y")
+    if raw.empty:
         st.caption("无法获取历史数据")
         return
-    hist["MA50"]  = hist["Close"].ewm(span=50,  adjust=False).mean()
-    hist["MA200"] = hist["Close"].ewm(span=200, adjust=False).mean()
-    bb_mid        = hist["Close"].rolling(20).mean()
-    bb_std        = hist["Close"].rolling(20).std()
-    hist["BB_upper"] = bb_mid + 2 * bb_std
-    hist["BB_mid"]   = bb_mid
-    hist["BB_lower"] = bb_mid - 2 * bb_std
-    hist = hist.iloc[-252:]
+    current_price = info.get("currentPrice") or info.get("regularMarketPrice") or raw["Close"].iloc[-1]
 
-    # Volume Profile
-    n_bins = 60
-    p_min, p_max = hist["Low"].min(), hist["High"].max()
-    bins = np.linspace(p_min, p_max, n_bins + 1)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-    vp = np.zeros(n_bins)
-    for _, row in hist.iterrows():
-        mask = (bins[1:] >= row["Low"]) & (bins[:-1] <= row["High"])
-        n_overlap = mask.sum()
-        if n_overlap > 0:
-            vp[mask] += row["Volume"] / n_overlap
-    poc_price = bin_centers[vp.argmax()]
-    vp_norm = vp / vp.max()
-    current_price = info.get("currentPrice") or info.get("regularMarketPrice") or hist["Close"].iloc[-1]
-    bar_colors = ["rgba(100,180,255,0.5)" if c <= current_price else "rgba(255,120,120,0.5)"
-                  for c in bin_centers]
+    d = _build_indicators(raw).iloc[-252:]
+    dc, dv, dvn, d_poc, d_clr = _calc_vp(d, current_price)
 
-    fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
-                        column_widths=[0.8, 0.2], horizontal_spacing=0.0)
+    wraw = raw.resample("W").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
+    w = _build_indicators(wraw).iloc[-156:]
+    wc, wv, wvn, w_poc, w_clr = _calc_vp(w, current_price)
 
-    # BB 填充
-    fig.add_trace(go.Scatter(
-        x=list(hist.index) + list(hist.index[::-1]),
-        y=list(hist["BB_upper"]) + list(hist["BB_lower"][::-1]),
-        fill="toself", fillcolor="rgba(150,150,255,0.08)",
-        line=dict(color="rgba(0,0,0,0)"),
-        hoverinfo="skip", showlegend=False,
-    ), row=1, col=1)
-    fig.add_trace(go.Scatter(x=hist.index, y=hist["BB_upper"],
-        name="BB上轨", line=dict(color="rgba(150,150,255,0.5)", width=1)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=hist.index, y=hist["BB_mid"],
-        name="BB中轨", line=dict(color="rgba(150,150,255,0.7)", width=1, dash="dot")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=hist.index, y=hist["BB_lower"],
-        name="BB下轨", line=dict(color="rgba(150,150,255,0.5)", width=1)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=hist.index, y=hist["Close"],
-        name="收盘价", line=dict(color="#4da3ff", width=2)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=hist.index, y=hist["MA50"],
-        name="EMA50", line=dict(color="#f0a128", width=1.5, dash="dot")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=hist.index, y=hist["MA200"],
-        name="EMA200", line=dict(color="#e46f95", width=1.5, dash="dash")), row=1, col=1)
-
-    # Volume Profile 水平条形
-    fig.add_trace(go.Bar(
-        x=vp_norm, y=bin_centers,
-        orientation="h",
-        marker_color=bar_colors,
-        marker_line_width=0,
-        hovertemplate="价格 $%{y:.2f}<br>成交量 %{customdata:,.0f}<extra></extra>",
-        customdata=vp,
-        showlegend=False,
-    ), row=1, col=2)
-
-    # POC 线
-    fig.add_hline(y=poc_price, line_dash="dash", line_color="#FFD700", line_width=1.2,
-                  annotation_text=f"POC ${poc_price:.2f}",
-                  annotation_font_color="#FFD700", annotation_position="top right")
+    N = 9
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.8, 0.2], horizontal_spacing=0.0)
+    _add_chart_traces(fig, d, dc, dv, dvn, d_poc, d_clr, True)
+    _add_chart_traces(fig, w, wc, wv, wvn, w_poc, w_clr, False)
 
     fig.update_layout(
-        height=320,
-        margin=dict(t=10, b=10, l=0, r=10),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ccc", size=11),
-        legend=dict(orientation="h", y=1.08),
-        bargap=0,
+        height=340, margin=dict(t=44, b=10, l=0, r=10),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc", size=11), legend=dict(orientation="h", y=1.18), bargap=0,
+        updatemenus=[dict(
+            type="buttons", direction="left",
+            buttons=[
+                dict(label="日线（1年）", method="update", args=[{"visible": [True]*N + [False]*N}]),
+                dict(label="周线（3年）", method="update", args=[{"visible": [False]*N + [True]*N}]),
+            ],
+            bgcolor="#2a2a2a", bordercolor="#555", font=dict(color="#ccc", size=11),
+            x=0.0, y=1.15, xanchor="left", yanchor="top",
+        )],
     )
     fig.update_xaxes(gridcolor="#2a2a2a", row=1, col=1)
     fig.update_xaxes(showticklabels=False, showgrid=False, row=1, col=2)
@@ -625,8 +569,4 @@ for r in sorted_rows:
                 st.caption("数据不足")
 
         with right:
-            tab_d, tab_w = st.tabs(["日线（1年）", "周线（3年）"])
-            with tab_d:
-                price_chart(r["sym"], r["info"])
-            with tab_w:
-                weekly_chart(r["sym"], r["info"])
+            price_chart(r["sym"], r["info"])
