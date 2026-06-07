@@ -333,6 +333,8 @@ with st.sidebar:
 
     tickers = load_tickers(profile)
 
+    from streamlit_sortables import sort_items
+
     st.subheader("添加")
     col1, col2 = st.columns([3, 1])
     new = col1.text_input("代码", label_visibility="collapsed", placeholder="TSLA").upper().strip()
@@ -344,13 +346,16 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("关注列表")
-    for sym in list(tickers):
-        c1, c2 = st.columns([4, 1])
-        c1.write(f"**{sym}**")
-        if c2.button("✕", key=f"del_{sym}"):
-            tickers.remove(sym)
-            save_tickers(profile, tickers)
-            st.rerun()
+    sorted_tickers = sort_items(tickers, key="ticker_sort")
+    if sorted_tickers != tickers:
+        save_tickers(profile, sorted_tickers)
+        st.rerun()
+
+    to_remove = st.selectbox("删除", ["— 选择删除 —"] + tickers, label_visibility="collapsed", key="remove_sel")
+    if to_remove != "— 选择删除 —" and st.button("删除选中", use_container_width=True):
+        tickers = [t for t in tickers if t != to_remove]
+        save_tickers(profile, tickers)
+        st.rerun()
 
     st.divider()
 
