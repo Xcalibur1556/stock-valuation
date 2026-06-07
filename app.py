@@ -288,10 +288,11 @@ def price_chart(symbol: str, info: dict):
         return
     current_price = info.get("currentPrice") or info.get("regularMarketPrice") or raw["Close"].iloc[-1]
 
-    full = _build_indicators(raw)
-    d = full.iloc[-252:]    # 1 year daily
-    w = full.iloc[-756:]    # 3 year daily (same candles, longer window)
+    d = _build_indicators(raw).iloc[-252:]
     dc, dv, dvn, d_poc, d_clr = _calc_vp(d, current_price)
+
+    wraw = raw.resample("W").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
+    w = _build_indicators(wraw).iloc[-156:]
     wc, wv, wvn, w_poc, w_clr = _calc_vp(w, current_price)
 
     N = 9
@@ -306,8 +307,8 @@ def price_chart(symbol: str, info: dict):
         updatemenus=[dict(
             type="buttons", direction="left",
             buttons=[
-                dict(label="1年", method="update", args=[{"visible": [True]*N + [False]*N}]),
-                dict(label="3年", method="update", args=[{"visible": [False]*N + [True]*N}]),
+                dict(label="日线 1年", method="update", args=[{"visible": [True]*N + [False]*N}]),
+                dict(label="周线 3年", method="update", args=[{"visible": [False]*N + [True]*N}]),
             ],
             bgcolor="#2a2a2a", bordercolor="#555", font=dict(color="#ccc", size=11),
             x=0.0, y=1.15, xanchor="left", yanchor="top",
