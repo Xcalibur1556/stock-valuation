@@ -106,7 +106,7 @@ def fetch_info(symbol: str):
         return {}
 
 @st.cache_data(ttl=3600)
-def fetch_history(symbol: str, period: str = "1y"):
+def fetch_history(symbol: str, period: str = "2y"):
     try:
         return yf.Ticker(symbol, session=get_yf_session()).history(period=period)
     except Exception:
@@ -230,8 +230,38 @@ def fmt(val, digits=1, suffix=""):
         return "—"
     return f"{val:.{digits}f}{suffix}"
 
-def price_chart(symbol: str, info: dict):
+def weekly_chart(symbol: str, info: dict):
     hist = fetch_history(symbol, "2y")
+    if hist.empty:
+        st.caption("无法获取历史数据")
+        return
+    w = hist.resample("W").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
+    w = w.iloc[-52:]
+    w["EMA13"] = w["Close"].ewm(span=13, adjust=False).mean()
+    w["EMA26"] = w["Close"].ewm(span=26, adjust=False).mean()
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.02)
+    fig.add_trace(go.Candlestick(
+        x=w.index, open=w["Open"], high=w["High"], low=w["Low"], close=w["Close"],
+        increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+        name="K线", showlegend=False,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["EMA13"], name="EMA13", line=dict(color="#f0a128", width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=w.index, y=w["EMA26"], name="EMA26", line=dict(color="#e46f95", width=1.5, dash="dash")), row=1, col=1)
+    colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(w["Close"], w["Open"])]
+    fig.add_trace(go.Bar(x=w.index, y=w["Volume"], marker_color=colors, showlegend=False, name="成交量"), row=2, col=1)
+    fig.update_layout(
+        height=320, margin=dict(t=10, b=10, l=0, r=10),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc", size=11), legend=dict(orientation="h", y=1.08),
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_xaxes(gridcolor="#2a2a2a")
+    fig.update_yaxes(gridcolor="#2a2a2a")
+    st.plotly_chart(fig, use_container_width=True)
+
+def price_chart(symbol: str, info: dict):
+    hist = fetch_history(symbol, "1y")
     if hist.empty:
         st.caption("无法获取历史数据")
         return
@@ -242,7 +272,7 @@ def price_chart(symbol: str, info: dict):
     hist["BB_upper"] = bb_mid + 2 * bb_std
     hist["BB_mid"]   = bb_mid
     hist["BB_lower"] = bb_mid - 2 * bb_std
-    hist = hist.iloc[-252:]
+    hist = hist.iloc[-126:]
 
     # Volume Profile
     n_bins = 60
@@ -565,4 +595,8 @@ for r in sorted_rows:
                 st.caption("数据不足")
 
         with right:
-            price_chart(r["sym"], r["info"])
+            tab_d, tab_w = st.tabs(["日线（6个月）", "周线（1年）"])
+            with tab_d:
+                price_chart(r["sym"], r["info"])
+            with tab_w:
+                weekly_chart(r["sym"], r["info"])
