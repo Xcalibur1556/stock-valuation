@@ -291,7 +291,7 @@ def weekly_chart(symbol: str, info: dict):
     st.plotly_chart(fig, use_container_width=True)
 
 def price_chart(symbol: str, info: dict):
-    hist = fetch_history(symbol, "1y")
+    hist = fetch_history(symbol, "2y")
     if hist.empty:
         st.caption("无法获取历史数据")
         return
