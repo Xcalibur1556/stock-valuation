@@ -259,18 +259,22 @@ def _calc_vp(h, current_price):
 
 def _add_chart_traces(fig, h, centers, vp, vp_norm, poc, bar_colors, visible):
     v = visible
+    last = h.iloc[-1]
+    bb_u, bb_m, bb_l = last["BB_upper"], last["BB_mid"], last["BB_lower"]
+    ma50, ma200, close = last["MA50"], last["MA200"], last["Close"]
+
     fig.add_trace(go.Scatter(
         x=list(h.index) + list(h.index[::-1]),
         y=list(h["BB_upper"]) + list(h["BB_lower"][::-1]),
         fill="toself", fillcolor="rgba(150,150,255,0.08)",
         line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False, visible=v,
     ), row=1, col=1)
-    fig.add_trace(go.Scatter(x=h.index, y=h["BB_upper"], name="BB上轨", line=dict(color="rgba(150,150,255,0.5)", width=1), visible=v), row=1, col=1)
-    fig.add_trace(go.Scatter(x=h.index, y=h["BB_mid"],   name="BB中轨", line=dict(color="rgba(150,150,255,0.7)", width=1, dash="dot"), visible=v), row=1, col=1)
-    fig.add_trace(go.Scatter(x=h.index, y=h["BB_lower"], name="BB下轨", line=dict(color="rgba(150,150,255,0.5)", width=1), visible=v), row=1, col=1)
-    fig.add_trace(go.Scatter(x=h.index, y=h["Close"],    name="收盘价", line=dict(color="#4da3ff", width=2), visible=v), row=1, col=1)
-    fig.add_trace(go.Scatter(x=h.index, y=h["MA50"],     name="EMA50",  line=dict(color="#f0a128", width=1.5, dash="dot"), visible=v), row=1, col=1)
-    fig.add_trace(go.Scatter(x=h.index, y=h["MA200"],    name="EMA200", line=dict(color="#e46f95", width=1.5, dash="dash"), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["BB_upper"], name=f"BB上轨 ${bb_u:.2f}", line=dict(color="rgba(150,150,255,0.5)", width=1), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["BB_mid"],   name=f"BB中轨 ${bb_m:.2f}", line=dict(color="rgba(150,150,255,0.7)", width=1, dash="dot"), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["BB_lower"], name=f"BB下轨 ${bb_l:.2f}", line=dict(color="rgba(150,150,255,0.5)", width=1), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["Close"],    name=f"收盘价 ${close:.2f}", line=dict(color="#4da3ff", width=2), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["MA50"],     name=f"EMA50  ${ma50:.2f}",  line=dict(color="#f0a128", width=1.5, dash="dot"), visible=v), row=1, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["MA200"],    name=f"EMA200 ${ma200:.2f}", line=dict(color="#e46f95", width=1.5, dash="dash"), visible=v), row=1, col=1)
     fig.add_trace(go.Bar(x=vp_norm, y=centers, orientation="h", marker_color=bar_colors,
         marker_line_width=0, showlegend=False, visible=v,
         hovertemplate="价格 $%{y:.2f}<br>成交量 %{customdata:,.0f}<extra></extra>", customdata=vp,
@@ -278,7 +282,7 @@ def _add_chart_traces(fig, h, centers, vp, vp_norm, poc, bar_colors, visible):
     fig.add_trace(go.Scatter(
         x=[h.index[0], h.index[-1]], y=[poc, poc],
         mode="lines", line=dict(color="#FFD700", width=1.2, dash="dash"),
-        name=f"POC ${poc:.2f}", showlegend=False, visible=v,
+        name=f"POC    ${poc:.2f}", showlegend=True, visible=v,
     ), row=1, col=1)
 
 def price_chart(symbol: str, info: dict):
