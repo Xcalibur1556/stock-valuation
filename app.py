@@ -57,7 +57,8 @@ def save_tickers(profile: str, tickers: list):
 def fetch_info(symbol: str):
     try:
         return yf.Ticker(symbol).info
-    except Exception:
+    except Exception as e:
+        st.warning(f"{symbol} 错误详情：{e}")
         return {}
 
 @st.cache_data(ttl=3600)
