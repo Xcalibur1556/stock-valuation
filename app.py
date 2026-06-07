@@ -61,9 +61,26 @@ def load_all_profiles() -> list:
     try:
         res = get_supabase().table("profiles").select("name").execute()
         return [r["name"] for r in res.data]
-    except Exception as e:
-        st.sidebar.error(f"Supabase错误：{e}")
+    except Exception:
         return []
+
+def delete_profile(name: str):
+    try:
+        get_supabase().table("profiles").delete().eq("name", name).execute()
+        load_all_profiles.clear()
+    except Exception as e:
+        st.error(f"删除失败：{e}")
+
+def rename_profile(old_name: str, new_name: str):
+    try:
+        sb = get_supabase()
+        res = sb.table("profiles").select("tickers").eq("name", old_name).execute()
+        tickers = res.data[0]["tickers"] if res.data else []
+        sb.table("profiles").insert({"name": new_name, "tickers": tickers}).execute()
+        sb.table("profiles").delete().eq("name", old_name).execute()
+        load_all_profiles.clear()
+    except Exception as e:
+        st.error(f"重命名失败：{e}")
 
 # ── data fetching ──────────────────────────────────────────────────────────────
 
@@ -337,9 +354,7 @@ with st.sidebar:
 
     st.divider()
 
-    all_profiles = load_all_profiles()
-    st.caption(f"DEBUG: 所有用户={all_profiles}")
-    others = [p for p in all_profiles if p != profile]
+    others = [p for p in load_all_profiles() if p != profile]
     if others:
         st.subheader("其他用户")
         for p in others:
@@ -347,6 +362,35 @@ with st.sidebar:
                 st.query_params["profile"] = p
                 st.rerun()
         st.divider()
+
+    with st.expander("管理用户"):
+        for p in load_all_profiles():
+            c1, c2, c3 = st.columns([3, 1, 1])
+            c1.write(f"**{p}**" if p == profile else p)
+            if c2.button("✏️", key=f"edit_{p}", help="重命名"):
+                st.session_state["editing_profile"] = p
+            if c3.button("🗑", key=f"del_{p}", help="删除"):
+                delete_profile(p)
+                if p == profile:
+                    st.query_params.clear()
+                st.rerun()
+
+        editing = st.session_state.get("editing_profile")
+        if editing:
+            st.caption(f"重命名「{editing}」")
+            new_name = st.text_input("新名字", value=editing, key="rename_input", label_visibility="collapsed")
+            ca, cb = st.columns(2)
+            if ca.button("保存", use_container_width=True):
+                if new_name.strip() and new_name.strip() != editing:
+                    rename_profile(editing, new_name.strip())
+                    if editing == profile:
+                        st.query_params["profile"] = new_name.strip()
+                del st.session_state["editing_profile"]
+                st.rerun()
+            if cb.button("取消", use_container_width=True):
+                del st.session_state["editing_profile"]
+                st.rerun()
+    st.divider()
 
     if st.button("🔄 刷新数据", use_container_width=True):
         st.cache_data.clear()
