@@ -529,30 +529,30 @@ st.subheader("逐只详情")
 for sector in sorted(sector_rows):
     st.markdown(f"#### {sector}")
     for r in sector_rows[sector]:
-    with st.expander(f"{r['emoji']}  {r['sym']} — {r['verdict']}（得分 {r['score']:+.1f}）"):
-        left, right = st.columns([1, 2])
+        with st.expander(f"{r['emoji']}  {r['sym']} — {r['verdict']}（得分 {r['score']:+.1f}）"):
+            left, right = st.columns([1, 2])
 
-        with left:
-            st.markdown(f"**{r['name']}**")
-            st.caption(r["sector"])
+            with left:
+                st.markdown(f"**{r['name']}**")
+                st.caption(sector)
 
-            if r["pct52"] is not None:
-                st.write(f"**52周区间位置：{r['pct52']*100:.0f}%**")
-                st.progress(float(r["pct52"]))
-                lo = r["info"].get("fiftyTwoWeekLow", 0)
-                hi = r["info"].get("fiftyTwoWeekHigh", 0)
-                a, b, c = st.columns(3)
-                a.caption(f"低 ${lo:.2f}")
-                b.caption(f"现 ${r['price']:.2f}")
-                c.caption(f"高 ${hi:.2f}")
+                if r["pct52"] is not None:
+                    st.write(f"**52周区间位置：{r['pct52']*100:.0f}%**")
+                    st.progress(float(r["pct52"]))
+                    lo = r["info"].get("fiftyTwoWeekLow", 0)
+                    hi = r["info"].get("fiftyTwoWeekHigh", 0)
+                    a, b, c = st.columns(3)
+                    a.caption(f"低 ${lo:.2f}")
+                    b.caption(f"现 ${r['price']:.2f}")
+                    c.caption(f"高 ${hi:.2f}")
 
-            st.divider()
-            st.write("**估值信号**")
-            if r["signals"]:
-                for sig in r["signals"]:
-                    st.write(f"· {sig}")
-            else:
-                st.caption("数据不足")
+                st.divider()
+                st.write("**估值信号**")
+                if r["signals"]:
+                    for sig in r["signals"]:
+                        st.write(f"· {sig}")
+                else:
+                    st.caption("数据不足")
 
-        with right:
-            price_chart(r["sym"], r["info"])
+            with right:
+                price_chart(r["sym"], r["info"])
