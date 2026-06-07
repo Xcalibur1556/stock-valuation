@@ -16,6 +16,15 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+SECTOR_CN = {
+    "Technology": "科技", "Healthcare": "医疗健康",
+    "Financial Services": "金融", "Consumer Cyclical": "消费（周期）",
+    "Consumer Defensive": "消费（必需）", "Industrials": "工业",
+    "Energy": "能源", "Utilities": "公用事业",
+    "Real Estate": "房地产", "Communication Services": "通信",
+    "Basic Materials": "原材料",
+}
+
 SECTOR_FAIR_PE = {
     "Technology": 28,
     "Healthcare": 22,
@@ -344,14 +353,6 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("关注列表")
-    SECTOR_CN = {
-        "Technology": "科技", "Healthcare": "医疗健康",
-        "Financial Services": "金融", "Consumer Cyclical": "消费（周期）",
-        "Consumer Defensive": "消费（必需）", "Industrials": "工业",
-        "Energy": "能源", "Utilities": "公用事业",
-        "Real Estate": "房地产", "Communication Services": "通信",
-        "Basic Materials": "原材料",
-    }
     from collections import defaultdict
     groups = defaultdict(list)
     for sym in tickers:
@@ -463,20 +464,33 @@ if not rows:
     st.error("所有代码均无法获取数据")
     st.stop()
 
+# ── group rows by sector ───────────────────────────────────────────────────────
+
+from collections import defaultdict as _dd
+sector_rows = _dd(list)
+for r in rows:
+    if r["is_etf"]:
+        sector_rows["ETF"].append(r)
+    else:
+        en = r["info"].get("sector", "其他")
+        sector_rows[SECTOR_CN.get(en, en)].append(r)
+
 # ── overview cards ─────────────────────────────────────────────────────────────
 
-n = len(rows)
-cols = st.columns(min(n, 5))
-for i, r in enumerate(rows):
-    with cols[i % 5]:
-        pe_str  = fmt(r["trailing_pe"])
-        pct_str = f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—"
-        st.metric(
-            label=f"{r['emoji']} **{r['sym']}**",
-            value=f"${r['price']:.2f}",
-            delta=f"{r['verdict']}  |  P/E {pe_str}  |  52w {pct_str}",
-            delta_color="off",
-        )
+for sector in sorted(sector_rows):
+    sector_list = sector_rows[sector]
+    st.subheader(sector)
+    cols = st.columns(min(len(sector_list), 5))
+    for i, r in enumerate(sector_list):
+        with cols[i % 5]:
+            pe_str  = fmt(r["trailing_pe"])
+            pct_str = f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—"
+            st.metric(
+                label=f"{r['emoji']} **{r['sym']}**",
+                value=f"${r['price']:.2f}",
+                delta=f"{r['verdict']}  |  P/E {pe_str}  |  52w {pct_str}",
+                delta_color="off",
+            )
 
 st.divider()
 
@@ -485,23 +499,24 @@ st.divider()
 st.subheader("指标总览")
 
 table = []
-for r in rows:
-    table.append({
-        "代码":        r["sym"],
-        "名称":        r["name"],
-        "板块":        r["sector"],
-        "现价":        f"${r['price']:.2f}",
-        "P/E":         fmt(r["trailing_pe"]),
-        "Forward P/E": fmt(r["forward_pe"]),
-        "PEG":         fmt(r["peg"], 2),
-        "EV/EBITDA":   fmt(r["ev_ebitda"]),
-        "P/S":         fmt(r["ps"]),
-        "P/B":         fmt(r["pb"]),
-        "股息率":      fmt(r["div_yield"], 2, "%") if r["div_yield"] else "—",
-        "52周位置":    f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—",
-        "估值判断":    f"{r['emoji']} {r['verdict']}",
-        "得分":        f"{r['score']:+.1f}",
-    })
+for sector in sorted(sector_rows):
+    for r in sector_rows[sector]:
+        table.append({
+            "代码":        r["sym"],
+            "名称":        r["name"],
+            "板块":        sector,
+            "现价":        f"${r['price']:.2f}",
+            "P/E":         fmt(r["trailing_pe"]),
+            "Forward P/E": fmt(r["forward_pe"]),
+            "PEG":         fmt(r["peg"], 2),
+            "EV/EBITDA":   fmt(r["ev_ebitda"]),
+            "P/S":         fmt(r["ps"]),
+            "P/B":         fmt(r["pb"]),
+            "股息率":      fmt(r["div_yield"], 2, "%") if r["div_yield"] else "—",
+            "52周位置":    f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—",
+            "估值判断":    f"{r['emoji']} {r['verdict']}",
+            "得分":        f"{r['score']:+.1f}",
+        })
 
 st.dataframe(pd.DataFrame(table), hide_index=True, use_container_width=True)
 
@@ -511,7 +526,9 @@ st.divider()
 
 st.subheader("逐只详情")
 
-for r in rows:
+for sector in sorted(sector_rows):
+    st.markdown(f"#### {sector}")
+    for r in sector_rows[sector]:
     with st.expander(f"{r['emoji']}  {r['sym']} — {r['verdict']}（得分 {r['score']:+.1f}）"):
         left, right = st.columns([1, 2])
 
