@@ -1,0 +1,5 @@
+profiles.local.json
+profiles.local.json.tmp
+codex-server.*.log
+__pycache__/
+.streamlit/secrets.toml

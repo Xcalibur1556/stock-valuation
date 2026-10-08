@@ -2,12 +2,15 @@ import streamlit as st
 import yfinance as yf
 import json
 import os
+import logging
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="估值扫描",
@@ -43,39 +46,92 @@ SECTOR_FAIR_PE = {
 
 @st.cache_resource
 def get_supabase():
+    try:
+        url = st.secrets.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY")
+    except FileNotFoundError:
+        url = key = None
+    if not url and not key:
+        return None
+    if not url or not key:
+        raise RuntimeError("Supabase 配置不完整，请同时设置 SUPABASE_URL 和 SUPABASE_KEY")
     from supabase import create_client
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    return create_client(url, key)
+
+LOCAL_PROFILES = os.path.join(os.path.dirname(__file__), "profiles.local.json")
+
+def local_profiles():
+    if not os.path.exists(LOCAL_PROFILES):
+        return {}
+    with open(LOCAL_PROFILES, encoding="utf-8") as f:
+        return json.load(f)
+
+def write_local_profiles(profiles):
+    temporary = LOCAL_PROFILES + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as f:
+        json.dump(profiles, f, ensure_ascii=False, indent=2)
+    os.replace(temporary, LOCAL_PROFILES)
 
 def load_tickers(profile: str) -> list:
     defaults = ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
     try:
         sb = get_supabase()
+        if sb is None:
+            profiles = local_profiles()
+            if profile not in profiles:
+                profiles[profile] = defaults
+                write_local_profiles(profiles)
+                load_all_profiles.clear()
+            return list(profiles[profile])
         res = sb.table("profiles").select("tickers").eq("name", profile).execute()
         if res.data:
             return res.data[0]["tickers"]
         sb.table("profiles").insert({"name": profile, "tickers": defaults}).execute()
         load_all_profiles.clear()
         return defaults
-    except Exception:
-        return defaults
+    except Exception as e:
+        logger.exception("Profile load failed")
+        st.error(f"读取关注列表失败：{type(e).__name__}。请检查数据库连接、profiles 表及访问权限。")
+        st.stop()
 
 def save_tickers(profile: str, tickers: list):
     try:
-        get_supabase().table("profiles").upsert({"name": profile, "tickers": tickers}).execute()
+        sb = get_supabase()
+        if sb is None:
+            profiles = local_profiles()
+            profiles[profile] = list(tickers)
+            write_local_profiles(profiles)
+        else:
+            sb.table("profiles").upsert({"name": profile, "tickers": tickers}, on_conflict="name").execute()
+        load_all_profiles.clear()
+        return True
     except Exception as e:
+        logger.exception("Profile save failed")
         st.error(f"保存失败：{e}")
+        return False
 
 @st.cache_data(ttl=60)
 def load_all_profiles() -> list:
     try:
-        res = get_supabase().table("profiles").select("name").execute()
+        sb = get_supabase()
+        if sb is None:
+            return sorted(local_profiles())
+        res = sb.table("profiles").select("name").execute()
         return [r["name"] for r in res.data]
-    except Exception:
+    except Exception as e:
+        logger.exception("Profile list failed")
+        st.error(f"读取用户列表失败：{type(e).__name__}。请检查数据库配置及访问权限。")
         return []
 
 def delete_profile(name: str):
     try:
-        get_supabase().table("profiles").delete().eq("name", name).execute()
+        sb = get_supabase()
+        if sb is None:
+            profiles = local_profiles()
+            profiles.pop(name, None)
+            write_local_profiles(profiles)
+        else:
+            sb.table("profiles").delete().eq("name", name).execute()
         load_all_profiles.clear()
     except Exception as e:
         st.error(f"删除失败：{e}")
@@ -83,6 +139,14 @@ def delete_profile(name: str):
 def rename_profile(old_name: str, new_name: str):
     try:
         sb = get_supabase()
+        if sb is None:
+            profiles = local_profiles()
+            if new_name in profiles:
+                raise ValueError("用户名称已存在")
+            profiles[new_name] = profiles.pop(old_name)
+            write_local_profiles(profiles)
+            load_all_profiles.clear()
+            return
         res = sb.table("profiles").select("tickers").eq("name", old_name).execute()
         tickers = res.data[0]["tickers"] if res.data else []
         sb.table("profiles").insert({"name": new_name, "tickers": tickers}).execute()
@@ -96,20 +160,47 @@ def rename_profile(old_name: str, new_name: str):
 @st.cache_resource
 def get_yf_session():
     from curl_cffi import requests as cf_requests
-    return cf_requests.Session(impersonate="chrome")
+    return cf_requests.Session(impersonate="chrome", timeout=10)
 
 @st.cache_data(ttl=300)
+def _fetch_info(symbol: str):
+    ticker = yf.Ticker(symbol, session=get_yf_session())
+    try:
+        info = ticker.info
+        if not info or not (info.get("regularMarketPrice") or info.get("currentPrice")):
+            raise ValueError("行情服务未返回有效价格")
+        return info
+    except Exception:
+        logger.exception("Fundamentals unavailable for %s; trying price history", symbol)
+    history = ticker.history(period="5d", auto_adjust=False, raise_errors=True)
+    closes = history["Close"].dropna() if "Close" in history else pd.Series(dtype=float)
+    if closes.empty:
+        raise ValueError("估值接口及历史价格接口均不可用")
+    return {
+        "regularMarketPrice": float(closes.iloc[-1]),
+        "shortName": symbol,
+        "_price_only": True,
+        "_price_date": str(closes.index[-1]),
+    }
+
 def fetch_info(symbol: str):
     try:
-        return yf.Ticker(symbol, session=get_yf_session()).info
-    except Exception:
+        return _fetch_info(symbol)
+    except Exception as e:
+        logger.exception("Quote request failed for %s", symbol)
+        st.warning(f"{symbol}：行情请求失败（{type(e).__name__}），请稍后刷新重试；详细原因见应用日志。")
         return {}
 
 @st.cache_data(ttl=3600)
+def _fetch_history(symbol: str, period: str):
+    return yf.Ticker(symbol, session=get_yf_session()).history(period=period, raise_errors=True)
+
 def fetch_history(symbol: str, period: str = "2y"):
     try:
-        return yf.Ticker(symbol, session=get_yf_session()).history(period=period)
-    except Exception:
+        return _fetch_history(symbol, period)
+    except Exception as e:
+        logger.exception("History request failed for %s", symbol)
+        st.warning(f"{symbol}：历史行情请求失败（{type(e).__name__}），请稍后刷新重试。")
         return pd.DataFrame()
 
 # ── valuation engine ───────────────────────────────────────────────────────────
@@ -119,6 +210,8 @@ def score_stock(info: dict):
     Returns (verdict, emoji, score, signals).
     score < 0 = cheap side, score > 0 = expensive side.
     """
+    if info.get("_price_only"):
+        return "估值不可用", "⚪", None, None, ["基本面接口不可用，仅显示历史价格，无法计算估值。"]
     score = 0.0
     signals = []
     is_etf = info.get("quoteType") == "ETF"
@@ -361,15 +454,20 @@ with st.sidebar:
 
     tickers = load_tickers(profile)
 
+    if st.button("🔄 刷新数据", use_container_width=True):
+        st.cache_data.clear()
+        get_yf_session.clear()
+        st.rerun()
+
     st.subheader("添加")
     col1, col2 = st.columns([3, 1])
     new = col1.text_input("代码", label_visibility="collapsed", placeholder="TSLA").upper().strip()
     if col2.button("＋", use_container_width=True) and new:
         if new not in tickers:
-            tickers.append(new)
-            save_tickers(profile, tickers)
-            st.cache_data.clear()
-        st.rerun()
+            if save_tickers(profile, tickers + [new]):
+                st.rerun()
+        else:
+            st.info(f"{new} 已在关注列表中")
 
     st.subheader("关注列表")
     from collections import defaultdict
@@ -390,9 +488,8 @@ with st.sidebar:
             c1, c2 = st.columns([4, 1])
             c1.write(f"**{sym}**")
             if c2.button("✕", key=f"del_{sym}"):
-                tickers.remove(sym)
-                save_tickers(profile, tickers)
-                st.rerun()
+                if save_tickers(profile, [ticker for ticker in tickers if ticker != sym]):
+                    st.rerun()
 
     st.divider()
 
@@ -430,16 +527,15 @@ with st.sidebar:
             st.rerun()
     st.divider()
 
-    if st.button("🔄 刷新数据", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    if get_supabase() is None:
+        st.caption("本地模式：关注列表保存在本机；未连接云端用户数据。")
     st.caption("数据来源：Yahoo Finance\n5分钟缓存 · 历史图1小时缓存")
 
 # ── main ───────────────────────────────────────────────────────────────────────
 
 st.title("股票 / ETF 估值快照")
 _ny = datetime.now(ZoneInfo("America/New_York"))
-st.caption(f"更新于 {_ny.strftime('%Y-%m-%d %H:%M')} (NY时间)")
+st.caption(f"页面刷新于 {_ny.strftime('%Y-%m-%d %H:%M:%S')} (NY时间) · 行情以数据源返回时间为准")
 
 if not tickers:
     st.info("在左侧添加股票代码开始扫描")
@@ -483,6 +579,10 @@ if not rows:
     st.error("所有代码均无法获取数据")
     st.stop()
 
+for row in rows:
+    if row["info"].get("_price_only"):
+        st.warning(f"{row['sym']}：估值数据暂不可用，显示历史价格（{row['info']['_price_date']}），并非实时报价。")
+
 # ── group rows by sector ───────────────────────────────────────────────────────
 
 from collections import defaultdict as _dd
@@ -506,7 +606,7 @@ for i, r in enumerate(sorted_rows):
         pe_str  = fmt(r["trailing_pe"])
         pct_str = f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—"
         st.metric(
-            label=f"{r['emoji']} **{r['sym']}**",
+            label=f"{r['emoji']} **{r['sym']}**" + (" · 历史价格" if r['info'].get('_price_only') else ""),
             value=f"${r['price']:.2f}",
             delta=f"{r['verdict']}  |  P/E {pe_str}  |  52w {pct_str}",
             delta_color="off",
@@ -525,7 +625,8 @@ for r in sorted_rows:
         "代码":        r["sym"],
         "名称":        r["name"],
         "板块":        sn,
-        "现价":        f"${r['price']:.2f}",
+        "价格":        f"${r['price']:.2f}",
+        "价格说明":    "历史价格" if r['info'].get('_price_only') else "行情报价",
         "P/E":         fmt(r["trailing_pe"]),
         "Forward P/E": fmt(r["forward_pe"]),
         "PEG":         fmt(r["peg"], 2),
@@ -535,7 +636,7 @@ for r in sorted_rows:
         "股息率":      fmt(r["div_yield"], 2, "%") if r["div_yield"] else "—",
         "52周位置":    f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—",
         "估值判断":    f"{r['emoji']} {r['verdict']}",
-        "得分":        f"{r['score']:+.1f}",
+        "得分":        f"{r['score']:+.1f}" if r['score'] is not None else "—",
     })
 
 st.dataframe(pd.DataFrame(table), hide_index=True, use_container_width=True)
@@ -547,7 +648,8 @@ st.divider()
 st.subheader("逐只详情")
 
 for r in sorted_rows:
-    with st.expander(f"{r['emoji']}  {r['sym']} — {r['verdict']}（得分 {r['score']:+.1f}）"):
+    score_text = f"{r['score']:+.1f}" if r['score'] is not None else "—"
+    with st.expander(f"{r['emoji']}  {r['sym']} — {r['verdict']}（得分 {score_text}）"):
         left, right = st.columns([1, 2])
 
         with left:
