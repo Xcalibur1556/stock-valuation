@@ -3,6 +3,9 @@ import yfinance as yf
 import json
 import os
 import logging
+import urllib.request
+import urllib.error
+import urllib.parse
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -157,6 +160,58 @@ def rename_profile(old_name: str, new_name: str):
 
 # ── data fetching ──────────────────────────────────────────────────────────────
 
+def get_fmp_key():
+    try:
+        return str(st.secrets.get("FMP_API_KEY", "")).strip()
+    except FileNotFoundError:
+        return ""
+
+@st.cache_data(ttl=86400)
+def fetch_fmp_fundamentals(symbol: str):
+    """Cache fundamentals and permission failures for a day to conserve quota."""
+    key = get_fmp_key()
+    if not key:
+        return {}, ["未配置 FMP_API_KEY"]
+    if "apikey=" in key or key.startswith("http"):
+        return {}, ["FMP_API_KEY 格式错误：只填写密钥本身"]
+    result, notes = {}, []
+    endpoints = ("profile", "ratios-ttm")
+    for endpoint in endpoints:
+        params = urllib.parse.urlencode({"symbol": symbol, "apikey": key})
+        url = "https://financialmodelingprep.com/stable/" + endpoint + "?" + params
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "StockValuation/1.0"})
+            with urllib.request.urlopen(request, timeout=12) as response:
+                data = json.load(response)
+        except urllib.error.HTTPError as error:
+            status = error.code
+            message = {401: "密钥无效", 402: "需要更高套餐权限", 403: "当前套餐无此股票或接口权限", 429: "请求额度已用完或被限流"}.get(status, f"接口 HTTP {status}")
+            notes.append(f"{endpoint}：{message}")
+            if status in (401, 429):
+                break
+            continue
+        except Exception:
+            # Never log request exceptions: their URL can contain the API key.
+            notes.append(f"{endpoint}：连接或数据解析失败")
+            continue
+        records = [r for r in data if isinstance(r, dict) and r.get("symbol") == symbol] if isinstance(data, list) else []
+        if not records:
+            notes.append(f"{endpoint}：未返回可用数据，请检查密钥、股票覆盖及套餐权限")
+            continue
+        item = records[0]
+        if endpoint == "profile":
+            result.update({"shortName": item.get("companyName"), "sector": item.get("sector"),
+                           "quoteType": "ETF" if item.get("isEtf") else "EQUITY"})
+        else:
+            fields = {"trailingPE": "priceToEarningsRatioTTM", "trailingPegRatio": "priceToEarningsGrowthRatioTTM",
+                      "enterpriseToEbitda": "enterpriseValueMultipleTTM", "priceToSalesTrailing12Months": "priceToSalesRatioTTM",
+                      "priceToBook": "priceToBookRatioTTM", "dividendYield": "dividendYieldTTM"}
+            for target, source in fields.items():
+                value = item.get(source)
+                if isinstance(value, (int, float)) and np.isfinite(value):
+                    result[target] = float(value)
+    return {k: v for k, v in result.items() if v is not None}, notes
+
 @st.cache_resource
 def get_yf_session():
     from curl_cffi import requests as cf_requests
@@ -185,7 +240,15 @@ def _fetch_info(symbol: str):
 
 def fetch_info(symbol: str):
     try:
-        return _fetch_info(symbol)
+        info = dict(_fetch_info(symbol))
+        if get_fmp_key():
+            fundamentals, notes = fetch_fmp_fundamentals(symbol)
+            info.update(fundamentals)
+            info["_fmp_notes"] = notes
+            if any(info.get(field) is not None for field in ("trailingPE", "trailingPegRatio", "enterpriseToEbitda")):
+                info["_price_only"] = False
+                info["_fundamental_source"] = "FMP"
+        return info
     except Exception as e:
         logger.exception("Quote request failed for %s", symbol)
         st.warning(f"{symbol}：行情请求失败（{type(e).__name__}），请稍后刷新重试；详细原因见应用日志。")
@@ -455,7 +518,9 @@ with st.sidebar:
     tickers = load_tickers(profile)
 
     if st.button("🔄 刷新数据", use_container_width=True):
-        st.cache_data.clear()
+        _fetch_info.clear()
+        _fetch_history.clear()
+        load_all_profiles.clear()
         get_yf_session.clear()
         st.rerun()
 
@@ -529,7 +594,18 @@ with st.sidebar:
 
     if get_supabase() is None:
         st.caption("本地模式：关注列表保存在本机；未连接云端用户数据。")
-    st.caption("数据来源：Yahoo Finance\n5分钟缓存 · 历史图1小时缓存")
+    st.caption("价格：Yahoo Finance（5分钟缓存）\n历史图：1小时缓存 · FMP 基本面及权限结果：24小时缓存")
+    st.caption("FMP 密钥已配置" if get_fmp_key() else "FMP 密钥未配置")
+    if get_fmp_key():
+        with st.expander("FMP 接口检查（AAPL）"):
+            if st.button("检查 FMP 连接", key="check_fmp"):
+                fundamentals, notes = fetch_fmp_fundamentals("AAPL")
+                if fundamentals.get("trailingPE") is not None:
+                    st.success("FMP 估值接口可用，已取得 AAPL 的 P/E")
+                for note in notes:
+                    st.warning(note)
+                if not notes and fundamentals.get("trailingPE") is None:
+                    st.info("已连接 FMP，但没有返回可用的 P/E")
 
 # ── main ───────────────────────────────────────────────────────────────────────
 
@@ -580,8 +656,13 @@ if not rows:
     st.stop()
 
 for row in rows:
-    if row["info"].get("_price_only"):
-        st.warning(f"{row['sym']}：估值数据暂不可用，显示历史价格（{row['info']['_price_date']}），并非实时报价。")
+    if row["info"].get("_fundamental_source") == "FMP":
+        st.caption(f"{row['sym']}：估值指标来源 FMP；价格来源 Yahoo。")
+    for note in row["info"].get("_fmp_notes", []):
+        st.warning(f"{row['sym']} · FMP {note}")
+    if row["info"].get("_price_date"):
+        prefix = "估值数据暂不可用，" if row['info'].get('_price_only') else ""
+        st.warning(f"{row['sym']}：{prefix}显示历史价格（{row['info']['_price_date']}），并非实时报价。")
 
 # ── group rows by sector ───────────────────────────────────────────────────────
 
@@ -606,7 +687,7 @@ for i, r in enumerate(sorted_rows):
         pe_str  = fmt(r["trailing_pe"])
         pct_str = f"{r['pct52']*100:.0f}%" if r["pct52"] is not None else "—"
         st.metric(
-            label=f"{r['emoji']} **{r['sym']}**" + (" · 历史价格" if r['info'].get('_price_only') else ""),
+            label=f"{r['emoji']} **{r['sym']}**" + (" · 历史价格" if r['info'].get('_price_date') else ""),
             value=f"${r['price']:.2f}",
             delta=f"{r['verdict']}  |  P/E {pe_str}  |  52w {pct_str}",
             delta_color="off",
@@ -626,7 +707,7 @@ for r in sorted_rows:
         "名称":        r["name"],
         "板块":        sn,
         "价格":        f"${r['price']:.2f}",
-        "价格说明":    "历史价格" if r['info'].get('_price_only') else "行情报价",
+        "价格说明":    "历史价格" if r['info'].get('_price_date') else "行情报价",
         "P/E":         fmt(r["trailing_pe"]),
         "Forward P/E": fmt(r["forward_pe"]),
         "PEG":         fmt(r["peg"], 2),
